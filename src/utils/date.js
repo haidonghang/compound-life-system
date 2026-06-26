@@ -33,6 +33,15 @@ export function formatMinutes(totalSeconds) {
   return `${hours} 小时 ${rest} 分钟`;
 }
 
+export function formatDuration(minutesValue) {
+  const minutes = Number(minutesValue || 0);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (!rest) return `${hours} 小时`;
+  return `${hours} 小时 ${rest} 分钟`;
+}
+
 export function daysBetween(from, to) {
   const start = new Date(from);
   const end = new Date(to);

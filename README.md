@@ -1,162 +1,278 @@
 # 复利人生系统
 
-一个低成本个人成长任务管理 H5/PWA 原型，使用 Vue3 + Vite 实现。第一版数据保存在浏览器 `localStorage`，后续可以把 `src/store/useAppStore.js` 中的数据读写替换为 Supabase 表操作。
+Vue3 + Vite + PWA 个人目标执行系统。V3.1.4 接入 Supabase Storage 文件交付物：未登录继续支持文字/链接交付物，登录后可上传截图、PDF、录音、代码文件等真实文件。
 
-## 功能页面
+## V3.1.4 文件交付物
 
-- 首页：当前日期时间、今日完成率、今日三件大事、今日复利分、十年目标倒计时
-- 目标页：10 年、3 年、1 年、月目标管理
-- 任务页：新增、编辑、删除任务，支持优先级、预计时间、截止时间、所属目标、状态
-- 执行页：开始、暂停、完成任务，记录实际用时、完成质量、卡点、证据说明
-- 事件页：记录正面、负面、机会、风险事件
-- 复盘页：每日复盘表单
-- 数据页：最近 7 天完成率、类别任务数量、连续执行天数、拖延任务
+- 新增 Supabase Storage 上传，bucket 名称：`evidence-files`。
+- bucket 建议设置为 private。
+- 文件路径规则：`user_id/task_id/evidence_id/filename`。
+- 新增 `evidence_items` 元数据表，记录文件名、文件类型、大小和 Storage 路径。
+- 未登录时不能上传文件，但仍可添加文字交付物和链接交付物。
+- 删除文件交付物时，会同时删除 Storage 文件和 `evidence_items` 记录。
+- 前端仍然只使用 anon public key，不使用 `service_role` key。
 
-## 运行方式
+## V3.1.3 云同步
+
+- 新增 Supabase Auth 邮箱注册、登录、退出。
+- 新增同步/账号面板：显示本地模式、已登录、同步中、已同步、同步失败。
+- 未登录时继续使用 localStorage，不破坏原本本地模式。
+- 登录后新增、编辑、删除目标和任务会尝试同步到云端。
+- 首次登录后不会自动覆盖数据，必须手动点击“上传本地数据到云端”或“从云端拉取数据”。
+- JSON 导出/导入继续保留，作为离线备份兜底。
+- 前端只使用 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`，不要使用 `service_role` key。
+
+## 三个入口
+
+- 今日台：今日三件大事、当前执行倒计时、任务新增、任务基础编辑、进度质量和交付物记录。
+- 目标台：目标阶梯、自定义分类。
+- 复盘台：三道点选复盘、月视图、当天任务、伪努力提醒、JSON 备份。
+
+## 本地运行
 
 ```bash
 npm install
 npm run dev
 ```
 
-构建生产包：
+生产构建：
 
 ```bash
 npm run build
 npm run preview
 ```
 
-## 如何部署到公网
+## 环境变量
 
-当前版本适合先用免费静态托管部署，优先推荐 Vercel，也可以用 Netlify。两者默认都会提供 HTTPS 域名，例如 `https://xxx.vercel.app` 或 `https://xxx.netlify.app`，手机可以直接打开。
-
-### 1. 本地构建项目
-
-在项目根目录执行：
+复制 `.env.example` 为 `.env`：
 
 ```bash
-npm install
-npm run build
+VITE_SUPABASE_URL=your_supabase_project_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
-构建成功后会生成 `dist` 文件夹。`dist` 就是可以部署到公网的静态网站文件。
+不要把 Supabase `service_role` key 写进前端，也不要提交到 GitHub。
 
-### 2. 用 Netlify 拖拽 `dist` 部署
+## Supabase 创建步骤
 
-1. 打开 [Netlify](https://app.netlify.com/) 并登录。
-2. 进入 `Sites` 页面，选择 `Add new site`。
-3. 选择手动部署入口，把本地生成的 `dist` 文件夹拖进去。
-4. 等待上传完成，Netlify 会生成一个 `https://xxx.netlify.app` 域名。
-5. 用手机打开这个 HTTPS 地址即可访问。
+1. 在 Supabase 创建项目。
+2. 在 Project Settings → API 复制 Project URL 和 anon public key。
+3. 在本地 `.env` 写入 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`。
+4. 在 SQL Editor 执行下面的建表 SQL 和 RLS 策略。
+5. 运行 `npm run dev`，在页面顶部同步面板注册或登录。
 
-项目已包含 `netlify.toml`。如果后续改为连接 GitHub 自动部署，Netlify 会使用：
+## 数据表 SQL
 
-- Build command：`npm run build`
-- Publish directory：`dist`
+```sql
+create table if not exists goals (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  level text,
+  title text,
+  description text,
+  category text,
+  deadline date,
+  parent_goal_id uuid null,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
 
-### 3. 用 Vercel 连接 GitHub 部署
+create table if not exists tasks (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text,
+  category text,
+  goal_id uuid null,
+  priority text,
+  score integer,
+  estimated_minutes integer,
+  actual_minutes integer,
+  progress integer,
+  quality_score integer,
+  status text,
+  task_date date,
+  deadline timestamptz null,
+  evidence_required boolean default false,
+  evidence_items jsonb default '[]'::jsonb,
+  sessions jsonb default '[]'::jsonb,
+  reason text,
+  blockers text,
+  completed_at timestamptz null,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
 
-1. 把本项目提交到 GitHub 仓库。
-2. 打开 [Vercel](https://vercel.com/) 并登录。
-3. 点击 `Add New...`，选择 `Project`。
-4. 选择你的 GitHub 仓库并导入。
-5. Framework Preset 选择 `Vite`。
-6. Build Command 保持 `npm run build`。
-7. Output Directory 保持 `dist`。
-8. 点击 `Deploy`，完成后会得到 `https://xxx.vercel.app` 域名。
+create table if not exists reviews (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  review_date date,
+  main_deviation text,
+  biggest_gain text,
+  tomorrow_improvement text,
+  notes text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
 
-项目已包含 `vercel.json`，Vercel 会按该配置执行安装、构建和静态输出。
+create table if not exists events (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  event_date date,
+  type text,
+  title text,
+  description text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
 
-### 4. 手机添加到主屏幕
+create table if not exists evidence_items (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  task_id uuid not null,
+  type text,
+  title text,
+  content text,
+  url text null,
+  storage_path text null,
+  file_name text null,
+  file_type text null,
+  file_size integer null,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
 
-部署到 Vercel 或 Netlify 后，必须使用 HTTPS 地址打开。PWA 文件位于 `public/manifest.webmanifest` 和 `public/sw.js`，构建后会进入 `dist` 根目录。
-
-- Android Chrome：打开网站后，点击浏览器菜单，选择“添加到主屏幕”或“安装应用”。
-- iPhone Safari：打开网站后，点击分享按钮，选择“添加到主屏幕”。
-
-如果刚部署后没有出现安装入口，先刷新页面一次，或关闭浏览器重新打开 HTTPS 地址。Service Worker 通常需要首次加载后才会完成注册。
-
-### 5. 当前数据同步限制
-
-第一版数据只保存在当前浏览器的 `localStorage`。这意味着：
-
-- 同一台手机、同一个浏览器里数据会保留。
-- 换手机、换浏览器、清理浏览器数据后，不会自动同步。
-- 当前版本没有登录系统，也没有接 Supabase，成本可以保持在免费方案内。
-
-## 数据结构
-
-核心数据保存在 `localStorage` 的 `compound-life-system-state` 键下：
-
-```js
-{
-  version: 1,
-  settings: {
-    appStartedAt: '2026-06-25T00:00:00.000Z'
-  },
-  goals: [
-    {
-      id: 'goal_xxx',
-      level: '10y',
-      name: '目标名称',
-      category: '学习',
-      deadline: '2036-06-25',
-      reason: '重要原因',
-      createdAt: '2026-06-25T00:00:00.000Z',
-      updatedAt: '2026-06-25T00:00:00.000Z'
-    }
-  ],
-  tasks: [
-    {
-      id: 'task_xxx',
-      title: '任务名',
-      category: '学习',
-      priority: 'S',
-      estimatedMinutes: 90,
-      dueAt: '2026-06-25T21:00',
-      goalId: 'goal_xxx',
-      status: 'todo',
-      actualSeconds: 0,
-      quality: 0,
-      blockers: '',
-      evidence: '',
-      sessions: [],
-      completedAt: null,
-      createdAt: '2026-06-25T00:00:00.000Z',
-      updatedAt: '2026-06-25T00:00:00.000Z'
-    }
-  ],
-  events: [
-    {
-      id: 'event_xxx',
-      date: '2026-06-25',
-      type: 'positive',
-      title: '事件标题',
-      description: '事件说明',
-      createdAt: '2026-06-25T00:00:00.000Z'
-    }
-  ],
-  reviews: [
-    {
-      id: 'review_xxx',
-      date: '2026-06-25',
-      done: '',
-      problems: '',
-      shortcomings: '',
-      reasons: '',
-      improvements: '',
-      gains: '',
-      tomorrowFocus: '',
-      createdAt: '2026-06-25T00:00:00.000Z',
-      updatedAt: '2026-06-25T00:00:00.000Z'
-    }
-  ]
-}
+create table if not exists settings (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz default now()
+);
 ```
 
-## 后续接 Supabase 的建议
+## RLS 策略
 
-- `goals`、`tasks`、`events`、`reviews` 分别建表，字段沿用当前结构。
-- 先保留 `id` 为客户端生成，或迁移为 Supabase `uuid`。
-- 在 `useAppStore.js` 中把 `loadState()`、`persist()` 和各 action 替换为 Supabase CRUD。
-- 增加 `user_id` 字段后即可支持多用户。
+```sql
+alter table goals enable row level security;
+alter table tasks enable row level security;
+alter table reviews enable row level security;
+alter table events enable row level security;
+alter table evidence_items enable row level security;
+alter table settings enable row level security;
+
+create policy "goals_select_own" on goals for select using (auth.uid() = user_id);
+create policy "goals_insert_own" on goals for insert with check (auth.uid() = user_id);
+create policy "goals_update_own" on goals for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "goals_delete_own" on goals for delete using (auth.uid() = user_id);
+
+create policy "tasks_select_own" on tasks for select using (auth.uid() = user_id);
+create policy "tasks_insert_own" on tasks for insert with check (auth.uid() = user_id);
+create policy "tasks_update_own" on tasks for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "tasks_delete_own" on tasks for delete using (auth.uid() = user_id);
+
+create policy "reviews_select_own" on reviews for select using (auth.uid() = user_id);
+create policy "reviews_insert_own" on reviews for insert with check (auth.uid() = user_id);
+create policy "reviews_update_own" on reviews for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "reviews_delete_own" on reviews for delete using (auth.uid() = user_id);
+
+create policy "events_select_own" on events for select using (auth.uid() = user_id);
+create policy "events_insert_own" on events for insert with check (auth.uid() = user_id);
+create policy "events_update_own" on events for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "events_delete_own" on events for delete using (auth.uid() = user_id);
+
+create policy "evidence_items_select_own" on evidence_items for select using (auth.uid() = user_id);
+create policy "evidence_items_insert_own" on evidence_items for insert with check (auth.uid() = user_id);
+create policy "evidence_items_update_own" on evidence_items for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "evidence_items_delete_own" on evidence_items for delete using (auth.uid() = user_id);
+
+create policy "settings_select_own" on settings for select using (auth.uid() = user_id);
+create policy "settings_insert_own" on settings for insert with check (auth.uid() = user_id);
+create policy "settings_update_own" on settings for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "settings_delete_own" on settings for delete using (auth.uid() = user_id);
+```
+
+## Supabase Storage
+
+创建 private bucket：
+
+```sql
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('evidence-files', 'evidence-files', false, 10485760)
+on conflict (id) do update
+set public = false,
+    file_size_limit = 10485760;
+```
+
+Storage RLS policy：
+
+```sql
+create policy "evidence_files_select_own"
+on storage.objects for select
+using (
+  bucket_id = 'evidence-files'
+  and auth.uid()::text = (storage.foldername(name))[1]
+);
+
+create policy "evidence_files_insert_own"
+on storage.objects for insert
+with check (
+  bucket_id = 'evidence-files'
+  and auth.uid()::text = (storage.foldername(name))[1]
+);
+
+create policy "evidence_files_update_own"
+on storage.objects for update
+using (
+  bucket_id = 'evidence-files'
+  and auth.uid()::text = (storage.foldername(name))[1]
+)
+with check (
+  bucket_id = 'evidence-files'
+  and auth.uid()::text = (storage.foldername(name))[1]
+);
+
+create policy "evidence_files_delete_own"
+on storage.objects for delete
+using (
+  bucket_id = 'evidence-files'
+  and auth.uid()::text = (storage.foldername(name))[1]
+);
+```
+
+上传限制：
+
+- 单个文件不超过 10MB。
+- 支持图片、PDF、音频、代码文本、压缩包。
+- 如果文件过大，请压缩后上传，或改为填写链接交付物。
+
+## 同步规则
+
+1. 未登录：所有数据写入 localStorage。
+2. 登录：顶部同步面板显示当前账号，不自动覆盖任何数据。
+3. 上传本地数据到云端：把当前设备数据保存到 Supabase，同 id 数据会更新。
+4. 从云端拉取数据：用云端数据覆盖当前本地数据，操作前会弹窗确认。
+5. 同步失败时，本地数据仍保留，可继续导出 JSON 备份。
+
+## JSON 备份
+
+导出内容包括：
+
+- goals
+- tasks
+- events
+- reviews
+- settings
+
+导入前会做格式校验，并弹窗确认是否覆盖当前本地数据。
+
+## Vercel 部署
+
+1. 提交代码到 GitHub。
+2. 在 Vercel 导入仓库。
+3. Framework Preset 选择 `Vite`。
+4. Build Command 使用 `npm run build`。
+5. Output Directory 使用 `dist`。
+6. 在 Project Settings → Environment Variables 增加：
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+7. 点击 Deploy。
+
+项目已包含 `vercel.json`，Vercel 会按 Vite 静态站点部署。
